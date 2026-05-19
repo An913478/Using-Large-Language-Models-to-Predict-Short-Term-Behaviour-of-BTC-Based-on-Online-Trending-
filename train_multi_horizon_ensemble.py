@@ -48,6 +48,7 @@ SEED = 42
 
 
 def set_seed(seed: int = SEED) -> None:
+    """Fix random seeds for reproducible model training."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -56,6 +57,8 @@ def set_seed(seed: int = SEED) -> None:
 
 
 class SequenceDataset(Dataset):
+    """PyTorch dataset wrapper for sequence regression examples."""
+
     def __init__(self, X: np.ndarray, y: np.ndarray):
         self.X = torch.tensor(X, dtype=torch.float32)
         self.y = torch.tensor(y, dtype=torch.float32)
@@ -68,6 +71,8 @@ class SequenceDataset(Dataset):
 
 
 class LSTMRegressor(nn.Module):
+    """LSTM regression model for multi-horizon ensemble return prediction."""
+
     def __init__(
         self,
         input_size: int,
@@ -114,6 +119,7 @@ class FoldResult:
 
 
 def build_feature_list(df: pd.DataFrame) -> List[str]:
+    """Find numeric feature columns while excluding metadata and target fields."""
     excluded = {
         "Date",
         "llm_provider",
@@ -154,6 +160,7 @@ def make_sequences(
     dates: np.ndarray,
     seq_len: int,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Convert flattened arrays into supervised rolling sequence windows."""
     X_seq = []
     y_seq = []
     d_seq = []
@@ -167,6 +174,7 @@ def make_sequences(
 
 
 def get_walk_forward_splits(n_samples: int) -> List[Tuple[int, int]]:
+    """Generate floor-aligned train/test fold indices for walk-forward evaluation."""
     if n_samples < 100:
         return []
 
@@ -187,12 +195,14 @@ def get_walk_forward_splits(n_samples: int) -> List[Tuple[int, int]]:
 
 
 def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> Tuple[float, float]:
+    """Compute RMSE and MAE for regression predictions."""
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     mae = float(mean_absolute_error(y_true, y_pred))
     return rmse, mae
 
 
 def evaluate_direction(y_true_reg: np.ndarray, y_pred_reg: np.ndarray) -> Tuple[float, float]:
+    """Compute direction classification metrics from regression outputs."""
     y_true_dir = (y_true_reg > 0).astype(int)
     y_pred_dir = (y_pred_reg > 0).astype(int)
 
@@ -202,6 +212,7 @@ def evaluate_direction(y_true_reg: np.ndarray, y_pred_reg: np.ndarray) -> Tuple[
 
 
 def train_lstm_model(X_train: np.ndarray, y_train: np.ndarray, input_size: int) -> LSTMRegressor:
+    """Train an LSTM model for one fold and return the fitted model."""
     model = LSTMRegressor(input_size=input_size).to(DEVICE)
 
     dataset = SequenceDataset(X_train, y_train)
@@ -235,6 +246,7 @@ def run_horizon(
     horizon_name: str,
     target_return_col: str,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Run one horizon's walk-forward training and return fold, summary, and prediction DataFrames."""
     logger.info(f"\n==================== HORIZON {horizon_name} ====================")
 
     use_cols = ["Date"] + feature_cols + [target_return_col]
@@ -366,6 +378,7 @@ def run_horizon(
 
 
 def main(input_file: str = INPUT_FILE, output_dir: str = RESULTS_DIR, verbose: bool = False) -> None:
+    """Load ensemble features, run multi-horizon walk-forward training, and save results."""
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
@@ -432,6 +445,7 @@ def main(input_file: str = INPUT_FILE, output_dir: str = RESULTS_DIR, verbose: b
 
 
 def parse_args(argv=None) -> argparse.Namespace:
+    """Parse CLI arguments for the ensemble training script."""
     parser = argparse.ArgumentParser(description="Train multi-horizon LSTM on ensemble LLM features.")
     parser.add_argument("--input", type=str, default=INPUT_FILE, help="Input ensemble dataset parquet path")
     parser.add_argument("--output-dir", type=str, default=RESULTS_DIR, help="Results directory")
