@@ -42,6 +42,7 @@ LLM_TEXT_COLS = [
 
 
 def main() -> None:
+    """Merge base market features with Claude LLM features and write output parquet."""
     if not os.path.exists(BASE_FEATURES_FILE):
         raise FileNotFoundError(f"Base features file not found: {BASE_FEATURES_FILE}")
 
