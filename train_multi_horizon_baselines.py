@@ -52,9 +52,10 @@ SEED = 42
 
 
 def set_global_seed(seed: int, deterministic: bool = True) -> None:
-    """
-    Set Python, NumPy and PyTorch random seeds.
-    This makes each seed run reproducible.
+    """Set deterministic random seeds for Python, NumPy, and PyTorch.
+
+    This function configures the environment so that the same seed produces
+    repeatable results across CPU and GPU runs where determinism is available.
     """
     os.environ["PYTHONHASHSEED"] = str(seed)
 
@@ -72,6 +73,11 @@ def set_global_seed(seed: int, deterministic: bool = True) -> None:
 
 
 def set_seed(seed: int = SEED) -> None:
+    """Set random seeds for a minimal reproducible PyTorch run.
+
+    This helper is a lighter-weight alternative to :func:`set_global_seed`
+    and can be used when full deterministic configuration is not required.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -80,6 +86,8 @@ def set_seed(seed: int = SEED) -> None:
 
 
 class SequenceDataset(Dataset):
+    """Simple PyTorch dataset wrapper for sequence data."""
+
     def __init__(self, X: np.ndarray, y: np.ndarray):
         self.X = torch.tensor(X, dtype=torch.float32)
         self.y = torch.tensor(y, dtype=torch.float32)
@@ -92,6 +100,8 @@ class SequenceDataset(Dataset):
 
 
 class LSTMRegressor(nn.Module):
+    """LSTM-based regression model for return forecasting."""
+
     def __init__(self, input_size: int, hidden_size: int, num_layers: int, dropout: float):
         super().__init__()
         self.lstm = nn.LSTM(
@@ -126,6 +136,10 @@ class FoldResult:
 
 
 def build_feature_list(df: pd.DataFrame) -> List[str]:
+    """Build a list of numeric feature columns for model training.
+
+    Excludes date and all target columns so that only predictive inputs remain.
+    """
     excluded = {
         "Date",
         "Target_Close_1d",
@@ -155,6 +169,11 @@ def make_sequences(
     dates: np.ndarray,
     seq_len: int,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Convert time series arrays into rolling sequences for LSTM input.
+
+    Each returned sample contains a historical window of features and the
+    corresponding target at the next time step.
+    """
     X_seq, y_seq, d_seq = [], [], []
     for i in range(seq_len, len(feature_array)):
         X_seq.append(feature_array[i - seq_len : i])
@@ -164,6 +183,11 @@ def make_sequences(
 
 
 def train_lstm_model(X_train: np.ndarray, y_train: np.ndarray, input_size: int, seed: int) -> LSTMRegressor:
+    """Train an LSTM regressor on a single fold and return the trained model.
+
+    This function sets up a seeded data loader, trains for a fixed number of
+    epochs, and logs epoch-level loss during training.
+    """
     model = LSTMRegressor(
         input_size=input_size,
         hidden_size=HIDDEN_SIZE,
@@ -172,16 +196,22 @@ def train_lstm_model(X_train: np.ndarray, y_train: np.ndarray, input_size: int, 
     ).to(DEVICE)
 
     dataset = SequenceDataset(X_train, y_train)
-    
+
     def seed_worker(worker_id: int) -> None:
         worker_seed = torch.initial_seed() % 2**32
         np.random.seed(worker_seed)
         random.seed(worker_seed)
-    
+
     generator = torch.Generator()
     generator.manual_seed(seed)
-    
-    loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, worker_init_fn=seed_worker, generator=generator)
+
+    loader = DataLoader(
+        dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        worker_init_fn=seed_worker,
+        generator=generator,
+    )
 
     criterion = nn.HuberLoss(delta=1.0)
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
@@ -206,12 +236,14 @@ def train_lstm_model(X_train: np.ndarray, y_train: np.ndarray, input_size: int, 
 
 
 def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> Tuple[float, float]:
+    """Compute regression metrics for continuous return predictions."""
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     mae = float(mean_absolute_error(y_true, y_pred))
     return rmse, mae
 
 
 def evaluate_direction(y_true_reg: np.ndarray, y_pred_reg: np.ndarray) -> Tuple[float, float]:
+    """Compute binary direction metrics from continuous return forecasts."""
     y_true_dir = (y_true_reg > 0).astype(int)
     y_pred_dir = (y_pred_reg > 0).astype(int)
 
@@ -226,6 +258,11 @@ def get_walk_forward_splits(
     test_window: int = DEFAULT_TEST_WINDOW,
     gap: int = 0,
 ) -> List[Tuple[int, int]]:
+    """Generate walk-forward train/test index splits for sequential data.
+
+    Each fold uses all data up to the training end, with an optional embargo gap
+    before the test window. The test window moves forward until the end of data.
+    """
     if n_samples < 100:
         return []
 
@@ -261,6 +298,7 @@ def run_horizon(
     seed: int,
     gap: int = 0,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Run walk-forward training and evaluation for a single target horizon."""
     logger.info("\n==================== HORIZON %s ====================", horizon_name)
 
     df_local = df[["Date"] + feature_cols + [target_return_col]].copy()
@@ -395,6 +433,7 @@ def run_horizon(
 
 
 def main(args: argparse.Namespace) -> None:
+    """Execute the full multi-horizon baseline training workflow."""
     set_global_seed(args.seed)
 
     # -----------------------------
@@ -479,11 +518,11 @@ def main(args: argparse.Namespace) -> None:
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train LSTM baselines for multi-horizon BTC forecasting.")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--output_dir", type=str, default=None)
-    parser.add_argument("--model", type=str, default="lstm", choices=["lstm"])
-    parser.add_argument("--horizon", type=str, default=None, choices=["1d", "3d", "7d"])
-    parser.add_argument("--gap", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
+    parser.add_argument("--output_dir", type=str, default=None, help="Directory to write metrics and predictions.")
+    parser.add_argument("--model", type=str, default="lstm", choices=["lstm"], help="Baseline model architecture to train.")
+    parser.add_argument("--horizon", type=str, default=None, choices=["1d", "3d", "7d"], help="Optional single horizon to run.")
+    parser.add_argument("--gap", type=int, default=0, help="Embargo gap in samples between train and test windows.")
     return parser.parse_args(argv)
 
 

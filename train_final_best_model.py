@@ -5,13 +5,13 @@ with multi-horizon walk-forward validation, and exports fold metrics, prediction
 and JSON summaries.
 """
 
+from __future__ import annotations
+
 import argparse
-import logging
-import os
 import json
-import random
-from dataclasses import dataclass
-from typing import Dict, List, Tuple
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -21,10 +21,11 @@ from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
 
+logger = logging.getLogger(__name__)
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-INPUT_FILE = os.path.join(BASE_DIR, "data", "processed", "btc_final_features_with_llm_uncertainty.parquet")
-RESULTS_DIR = os.path.join(BASE_DIR, "results", "final_best_model")
+BASE_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_INPUT_FILE = BASE_DIR / "data" / "processed" / "btc_final_features_with_llm_uncertainty.parquet"
+DEFAULT_RESULTS_DIR = BASE_DIR / "results" / "final_best_model"
 
 SEQUENCE_LENGTH = 30
 BATCH_SIZE = 32
@@ -38,18 +39,11 @@ INITIAL_TRAIN_RATIO = 0.60
 DEFAULT_TEST_WINDOW = 60
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Model training: unsafe for smoke-tests
-SMOKE_TEST_SAFE = False
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
-
 SEED = 42
 
 
 def set_seed(seed: int = SEED) -> None:
-    random.seed(seed)
+    """Set deterministic random seeds for NumPy and PyTorch."""
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -57,6 +51,8 @@ def set_seed(seed: int = SEED) -> None:
 
 
 class SequenceDataset(Dataset):
+    """PyTorch dataset wrapper for sequence regression."""
+
     def __init__(self, X: np.ndarray, y: np.ndarray):
         self.X = torch.tensor(X, dtype=torch.float32)
         self.y = torch.tensor(y, dtype=torch.float32)
@@ -69,6 +65,8 @@ class SequenceDataset(Dataset):
 
 
 class LSTMRegressor(nn.Module):
+    """LSTM regression model for BTC return forecasting."""
+
     def __init__(
         self,
         input_size: int,
@@ -98,25 +96,39 @@ class LSTMRegressor(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out, _ = self.lstm(x)
         last_hidden = out[:, -1, :]
-        pred = self.head(last_hidden)
-        return pred.squeeze(-1)
+        return self.head(last_hidden).squeeze(-1)
 
 
-@dataclass
 class FoldResult:
-    horizon: str
-    fold: int
-    rmse_lstm: float
-    mae_lstm: float
-    rmse_naive: float
-    mae_naive: float
-    acc_lstm: float
-    f1_lstm: float
-    acc_naive: float
-    f1_naive: float
+    """Container for metrics produced by a single walk-forward fold."""
+
+    def __init__(
+        self,
+        horizon: str,
+        fold: int,
+        rmse_lstm: float,
+        mae_lstm: float,
+        rmse_naive: float,
+        mae_naive: float,
+        acc_lstm: float,
+        f1_lstm: float,
+        acc_naive: float,
+        f1_naive: float,
+    ):
+        self.horizon = horizon
+        self.fold = fold
+        self.rmse_lstm = rmse_lstm
+        self.mae_lstm = mae_lstm
+        self.rmse_naive = rmse_naive
+        self.mae_naive = mae_naive
+        self.acc_lstm = acc_lstm
+        self.f1_lstm = f1_lstm
+        self.acc_naive = acc_naive
+        self.f1_naive = f1_naive
 
 
 def build_feature_list(df: pd.DataFrame, horizon_name: str) -> List[str]:
+    """Return a list of numeric features appropriate for the horizon."""
     excluded = {
         "Date",
         "llm_provider",
@@ -160,9 +172,7 @@ def build_feature_list(df: pd.DataFrame, horizon_name: str) -> List[str]:
     chosen_prefix = f"{horizon_name}_"
     chosen_horizon_cols = [c for c in base_feature_cols if c.startswith(chosen_prefix)]
 
-    feature_cols = horizon_specific_cols + chosen_horizon_cols
-    feature_cols = sorted(list(dict.fromkeys(feature_cols)))
-
+    feature_cols = sorted(dict.fromkeys(horizon_specific_cols + chosen_horizon_cols))
     if not feature_cols:
         raise ValueError(f"No usable numeric feature columns found for {horizon_name}.")
 
@@ -175,6 +185,7 @@ def make_sequences(
     dates: np.ndarray,
     seq_len: int,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Create rolling sequence windows for the model."""
     X_seq = []
     y_seq = []
     d_seq = []
@@ -188,6 +199,7 @@ def make_sequences(
 
 
 def get_walk_forward_splits(n_samples: int) -> List[Tuple[int, int]]:
+    """Generate walk-forward train/test split indices."""
     if n_samples < 100:
         return []
 
@@ -208,12 +220,14 @@ def get_walk_forward_splits(n_samples: int) -> List[Tuple[int, int]]:
 
 
 def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> Tuple[float, float]:
+    """Evaluate regression predictions with RMSE and MAE."""
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     mae = float(mean_absolute_error(y_true, y_pred))
     return rmse, mae
 
 
 def evaluate_direction(y_true_reg: np.ndarray, y_pred_reg: np.ndarray) -> Tuple[float, float]:
+    """Evaluate directional classification metrics for returns."""
     y_true_dir = (y_true_reg > 0).astype(int)
     y_pred_dir = (y_pred_reg > 0).astype(int)
 
@@ -223,8 +237,8 @@ def evaluate_direction(y_true_reg: np.ndarray, y_pred_reg: np.ndarray) -> Tuple[
 
 
 def train_lstm_model(X_train: np.ndarray, y_train: np.ndarray, input_size: int) -> LSTMRegressor:
+    """Train an LSTM model on the provided training sequences."""
     model = LSTMRegressor(input_size=input_size).to(DEVICE)
-
     dataset = SequenceDataset(X_train, y_train)
     loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
@@ -255,12 +269,12 @@ def run_horizon(
     horizon_name: str,
     target_return_col: str,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Run training and evaluation for a single forecast horizon."""
     feature_cols = build_feature_list(df, horizon_name)
 
     logger.info("\n==================== HORIZON %s ====================", horizon_name)
-    logger.info("Feature count for %s: %d", horizon_name, len(feature_cols))    # -----------------------------
-    # Prepare horizon-specific dataset and targets
-    # -----------------------------
+    logger.info("Feature count for %s: %d", horizon_name, len(feature_cols))
+
     use_cols = ["Date"] + feature_cols + [target_return_col]
     df_local = df[use_cols].copy()
     logger.info("Rows before cleaning: %d", len(df_local))
@@ -285,12 +299,11 @@ def run_horizon(
 
     splits = get_walk_forward_splits(len(X_seq))
     logger.info("Number of walk-forward folds for %s: %d", horizon_name, len(splits))
-
     if not splits:
         raise ValueError(f"No valid walk-forward splits generated for horizon {horizon_name}.")
 
-    fold_results = []
-    pred_rows = []
+    fold_results: List[FoldResult] = []
+    pred_rows: List[Dict[str, object]] = []
 
     for fold_idx, (train_end, test_end) in enumerate(splits, start=1):
         logger.info("\nFold %d: train_end=%d, test_end=%d", fold_idx, train_end, test_end)
@@ -358,23 +371,22 @@ def run_horizon(
             )
         )
 
-        for i in range(len(y_test)):
+        for idx in range(len(y_test)):
             pred_rows.append(
                 {
-                    "Date": pd.to_datetime(d_test[i]),
+                    "Date": pd.to_datetime(d_test[idx]),
                     "horizon": horizon_name,
                     "fold": fold_idx,
-                    "actual_return": float(y_test[i]),
-                    "predicted_return_lstm": float(y_pred_lstm[i]),
-                    "predicted_return_naive": float(y_pred_naive[i]),
-                    "actual_direction": int(y_test[i] > 0),
-                    "predicted_direction_lstm": int(y_pred_lstm[i] > 0),
-                    "predicted_direction_naive": int(y_pred_naive[i] > 0),
+                    "actual_return": float(y_test[idx]),
+                    "predicted_return_lstm": float(y_pred_lstm[idx]),
+                    "predicted_return_naive": float(y_pred_naive[idx]),
+                    "actual_direction": int(y_test[idx] > 0),
+                    "predicted_direction_lstm": int(y_pred_lstm[idx] > 0),
+                    "predicted_direction_naive": int(y_pred_naive[idx] > 0),
                 }
             )
 
-    fold_df = pd.DataFrame([vars(r) for r in fold_results])
-
+    fold_df = pd.DataFrame([vars(fr) for fr in fold_results])
     summary_df = (
         fold_df.groupby("horizon", as_index=False)
         .agg(
@@ -389,28 +401,62 @@ def run_horizon(
             num_folds=("fold", "count"),
         )
     )
-
     preds_df = pd.DataFrame(pred_rows)
     return fold_df, summary_df, preds_df
 
 
-def main() -> None:
-    set_seed(SEED)
-    os.makedirs(RESULTS_DIR, exist_ok=True)
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    """Parse command-line arguments for the script."""
+    parser = argparse.ArgumentParser(
+        prog="train_final_best_model",
+        description="Train the final BTC forecasting model using LLM uncertainty features.",
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=DEFAULT_INPUT_FILE,
+        help="Input Parquet dataset path.",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=DEFAULT_RESULTS_DIR,
+        help="Directory to store result files.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=SEED,
+        help="Random seed for reproducibility.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging.",
+    )
+    return parser.parse_args(argv)
 
-    if not os.path.exists(INPUT_FILE):
-        raise FileNotFoundError(f"Missing upgraded dataset: {INPUT_FILE}")
 
-    df = pd.read_parquet(INPUT_FILE).copy()
+def main(argv: Optional[list[str]] = None) -> None:
+    """Main entry point for the final best model training script."""
+    args = parse_args(argv)
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+
+    set_seed(args.seed)
+    results_dir = args.results_dir
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    input_file = args.input
+    if not input_file.exists():
+        raise FileNotFoundError(f"Missing upgraded dataset: {input_file}")
+
+    df = pd.read_parquet(input_file).copy()
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
 
     logger.info("Loaded final upgraded dataset")
     logger.info("Rows: %d", len(df))
     logger.info("Columns: %d", len(df.columns))
-    # -----------------------------
-    # Train one model for each forecast horizon
-    # -----------------------------
 
     horizon_map = {
         "1d": "Target_Return_1d",
@@ -432,43 +478,29 @@ def main() -> None:
         all_summary_dfs.append(summary_df)
         all_preds_dfs.append(preds_df)
 
-    # -----------------------------
-    # Aggregate fold results and save all output files
-    # -----------------------------
     fold_results_df = pd.concat(all_fold_dfs, ignore_index=True)
     summary_results_df = pd.concat(all_summary_dfs, ignore_index=True)
     predictions_df = pd.concat(all_preds_dfs, ignore_index=True)
 
-    fold_path = os.path.join(RESULTS_DIR, "fold_metrics_final_best.csv")
-    summary_path = os.path.join(RESULTS_DIR, "summary_final_best.csv")
-    preds_path = os.path.join(RESULTS_DIR, "predictions_final_best.csv")
-    json_path = os.path.join(RESULTS_DIR, "summary_final_best.json")
+    fold_path = results_dir / "fold_metrics_final_best.csv"
+    summary_path = results_dir / "summary_final_best.csv"
+    preds_path = results_dir / "predictions_final_best.csv"
+    json_path = results_dir / "summary_final_best.json"
 
     fold_results_df.to_csv(fold_path, index=False)
     summary_results_df.to_csv(summary_path, index=False)
     predictions_df.to_csv(preds_path, index=False)
 
-    with open(json_path, "w", encoding="utf-8") as f:
+    with json_path.open("w", encoding="utf-8") as f:
         json.dump(summary_results_df.to_dict(orient="records"), f, indent=2, default=str)
 
     logger.info("\n===== FINAL SUMMARY =====")
     logger.info("\n%s", summary_results_df)
-
-    logger.info("\nSaved fold metrics to: %s", fold_path)
+    logger.info("Saved fold metrics to: %s", fold_path)
     logger.info("Saved summary metrics to: %s", summary_path)
     logger.info("Saved predictions to: %s", preds_path)
     logger.info("Saved JSON summary to: %s", json_path)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train the final best model with LLM uncertainty features.")
-    parser.add_argument("--input", default=INPUT_FILE, help="Input parquet file")
-    parser.add_argument("--results-dir", default=RESULTS_DIR, help="Results directory")
-    parser.add_argument("--seed", type=int, default=SEED, help="Random seed")
-    args = parser.parse_args()
-
-    INPUT_FILE = args.input
-    RESULTS_DIR = args.results_dir
-    SEED = args.seed
-
     main()

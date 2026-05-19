@@ -52,6 +52,7 @@ SEED = 42
 
 
 def set_seed(seed: int = SEED) -> None:
+    """Seed Python, NumPy, and PyTorch for deterministic execution."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -60,6 +61,8 @@ def set_seed(seed: int = SEED) -> None:
 
 
 class SequenceDataset(Dataset):
+    """PyTorch dataset wrapping rolling feature sequences and regression targets."""
+
     def __init__(self, X: np.ndarray, y: np.ndarray):
         self.X = torch.tensor(X, dtype=torch.float32)
         self.y = torch.tensor(y, dtype=torch.float32)
@@ -72,6 +75,8 @@ class SequenceDataset(Dataset):
 
 
 class PositionalEncoding(nn.Module):
+    """Add sinusoidal positional encodings to sequence input features."""
+
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 500):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
@@ -92,6 +97,8 @@ class PositionalEncoding(nn.Module):
 
 
 class TransformerRegressor(nn.Module):
+    """Transformer-based regression model for multi-horizon BTC forecasting."""
+
     def __init__(
         self,
         input_size: int,
@@ -147,6 +154,7 @@ class FoldResult:
 
 
 def build_feature_list(df: pd.DataFrame) -> List[str]:
+    """Return numeric feature column names excluding target columns."""
     excluded = {
         "Date",
         "Target_Close_1d",
@@ -173,6 +181,7 @@ def make_sequences(
     dates: np.ndarray,
     seq_len: int,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build rolling sequences for transformer training and prediction."""
     X_seq, y_seq, d_seq = [], [], []
     for i in range(seq_len, len(feature_array)):
         X_seq.append(feature_array[i - seq_len : i])
@@ -182,6 +191,7 @@ def make_sequences(
 
 
 def train_transformer_model(X_train: np.ndarray, y_train: np.ndarray, input_size: int) -> TransformerRegressor:
+    """Train the transformer regressor on a single fold."""
     model = TransformerRegressor(
         input_size=input_size,
         d_model=D_MODEL,
@@ -232,6 +242,7 @@ def evaluate_direction(y_true_reg: np.ndarray, y_pred_reg: np.ndarray) -> Tuple[
 
 
 def get_walk_forward_splits(n_samples: int) -> List[Tuple[int, int]]:
+    """Return walk-forward fold boundaries for a sequence dataset."""
     if n_samples < 100:
         return []
 
@@ -251,6 +262,7 @@ def get_walk_forward_splits(n_samples: int) -> List[Tuple[int, int]]:
 
 
 def run_horizon(df: pd.DataFrame, feature_cols: List[str], horizon_name: str, target_return_col: str):
+    """Run walk-forward training and evaluation for one transformer horizon."""
     logger.info(f"\n==================== HORIZON {horizon_name} ====================")
 
     df_local = df[["Date"] + feature_cols + [target_return_col]].copy()
@@ -301,6 +313,7 @@ def run_horizon(df: pd.DataFrame, feature_cols: List[str], horizon_name: str, ta
         target_scaler = StandardScaler()
         y_train = target_scaler.fit_transform(y_train_raw.reshape(-1, 1)).flatten()
 
+        # Train transformer on the scaled training split for this fold.
         model = train_transformer_model(X_train_scaled, y_train, X_train_scaled.shape[-1])
 
         model.eval()
@@ -372,6 +385,7 @@ def run_horizon(df: pd.DataFrame, feature_cols: List[str], horizon_name: str, ta
 
 
 def main(input_file: str = INPUT_FILE, output_dir: str = RESULTS_DIR, verbose: bool = False) -> None:
+    """Run the transformer training pipeline and write metrics/predictions."""
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 

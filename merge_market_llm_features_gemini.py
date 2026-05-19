@@ -38,6 +38,7 @@ LLM_TEXT_COLS = [
 
 
 def main(input_file: str = BASE_FEATURES_FILE, llm_file: str = LLM_FILE, output_file: str = OUTPUT_FILE, verbose: bool = False) -> None:
+    """Merge base market features with Gemini LLM feature data and write output parquet."""
     if verbose:
         logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
 

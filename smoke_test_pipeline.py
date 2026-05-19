@@ -89,6 +89,7 @@ class CheckResult:
 
 
 def check_script(module_name: str, run: bool = False) -> CheckResult:
+    """Import a pipeline script and optionally execute its safe `main` function."""
     result = CheckResult(name=module_name)
     full_name = f"scripts.{module_name}"
     try:
@@ -115,6 +116,7 @@ def check_script(module_name: str, run: bool = False) -> CheckResult:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run smoke tests for pipeline script importability and optional safe execution."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Smoke-test pipeline scripts")

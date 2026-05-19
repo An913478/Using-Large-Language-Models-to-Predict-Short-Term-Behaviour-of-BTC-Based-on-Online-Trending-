@@ -384,7 +384,68 @@ def print_best_summary(summary_df: pd.DataFrame) -> None:
         logger.info(f"  Best F1 provider: {best_f1['provider']} ({best_f1['f1_lstm_mean']:.6f})")
 
 
-def main(results_dir: str = RESULTS_DIR, verbose: bool = False) -> None:
+def compute_selection_weights(fold_df: pd.DataFrame, selection_folds: List[int] = list(range(1, 8))) -> Dict[str, pd.DataFrame]:
+    """Compute per-horizon provider weights using selection folds (1..7).
+
+    Weights are inverse-mean-RMSE normalized to sum to 1 for each horizon.
+    Returns a dict mapping horizon -> DataFrame(provider, weight).
+    """
+    weights: Dict[str, pd.DataFrame] = {}
+    for horizon in ["1d", "3d", "7d"]:
+        sub = fold_df[fold_df["horizon"] == horizon]
+        sel = sub[sub["fold"].isin(selection_folds)]
+        if sel.empty:
+            continue
+
+        rmse_by_provider = sel.groupby("provider")["rmse_lstm"].mean()
+        inv = 1.0 / (rmse_by_provider.replace(0, 1e-8))
+        norm = inv / inv.sum()
+        dfw = norm.rename("weight").reset_index()
+        weights[horizon] = dfw
+
+    return weights
+
+
+def confirm_weights_on_folds(
+    fold_df: pd.DataFrame,
+    weights: Dict[str, pd.DataFrame],
+    confirmation_folds: List[int] = [8, 9],
+    tolerance: float = 0.02,
+) -> Dict[str, pd.DataFrame]:
+    """Confirm frozen weights on reserved folds (8..9).
+
+    Uses the mean RMSE per provider on the confirmation folds to estimate an
+    ensemble RMSE via weighted average of provider MSEs (approximation).
+    Returns a dict mapping horizon -> DataFrame with provider, weight,
+    rmse_confirm, ensemble_rmse, best_rmse, confirmed.
+    """
+    confirmations: Dict[str, pd.DataFrame] = {}
+    for horizon, wdf in weights.items():
+        sub = fold_df[(fold_df["horizon"] == horizon) & (fold_df["fold"].isin(confirmation_folds))]
+        if sub.empty:
+            continue
+
+        rmse_confirm = sub.groupby("provider")["rmse_lstm"].mean()
+        merged = wdf.merge(rmse_confirm.rename("rmse_confirm"), on="provider", how="left")
+
+        # approximate ensemble MSE as weighted sum of provider MSEs
+        merged["mse_confirm"] = merged["rmse_confirm"] ** 2
+        ensemble_mse = float((merged["weight"] * merged["mse_confirm"]).sum())
+        ensemble_rmse = float(np.sqrt(ensemble_mse)) if ensemble_mse >= 0 else float("nan")
+
+        best_rmse = float(merged["rmse_confirm"].min())
+        confirmed = ensemble_rmse <= best_rmse * (1.0 + tolerance)
+
+        merged["ensemble_rmse"] = ensemble_rmse
+        merged["best_rmse"] = best_rmse
+        merged["confirmed"] = confirmed
+
+        confirmations[horizon] = merged.drop(columns=["mse_confirm"], errors="ignore")
+
+    return confirmations
+
+
+def main(results_dir: str = RESULTS_DIR, verbose: bool = False, require_confirmation: bool = False) -> None:
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
@@ -441,6 +502,32 @@ def main(results_dir: str = RESULTS_DIR, verbose: bool = False) -> None:
     summary_results_df.to_csv(summary_path, index=False)
     predictions_df.to_csv(preds_path, index=False)
 
+    # --- Compute selection weights (folds 1..7) and optional confirmation (8..9)
+    try:
+        selection_weights = compute_selection_weights(fold_results_df)
+        for h, dfw in selection_weights.items():
+            sel_path = os.path.join(results_dir, f"provider_weights_selection_h{h}.csv")
+            dfw.to_csv(sel_path, index=False)
+            logger.info("Saved selection weights for horizon %s to %s", h, sel_path)
+
+        if require_confirmation:
+            confirmations = confirm_weights_on_folds(fold_results_df, selection_weights)
+            for h, cdf in confirmations.items():
+                conf_path = os.path.join(results_dir, f"provider_weights_confirmation_h{h}.csv")
+                cdf.to_csv(conf_path, index=False)
+                logger.info("Saved weight confirmation for horizon %s to %s", h, conf_path)
+
+                # Log failures explicitly
+                if not cdf.empty and not bool(cdf.iloc[0].get("confirmed", True)):
+                    logger.warning(
+                        "Weight confirmation failed for horizon %s: ensemble_rmse=%.6f best_rmse=%.6f",
+                        h,
+                        float(cdf.iloc[0].get("ensemble_rmse", float("nan"))),
+                        float(cdf.iloc[0].get("best_rmse", float("nan"))),
+                    )
+    except Exception as e:
+        logger.exception("Error while computing/confirming provider weights: %s", e)
+
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(summary_results_df.to_dict(orient="records"), f, indent=2, default=str)
 
@@ -459,9 +546,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare multi-horizon LLM providers with walk-forward evaluation.")
     parser.add_argument("--output-dir", type=str, default=RESULTS_DIR, help="Results directory")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    parser.add_argument(
+        "--require-confirmation",
+        action="store_true",
+        help="Compute provider weights on folds 1-7 and confirm on folds 8-9",
+    )
     return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
     args = parse_args()
-    main(results_dir=args.output_dir, verbose=args.verbose)
+    main(results_dir=args.output_dir, verbose=args.verbose, require_confirmation=getattr(args, "require_confirmation", False))

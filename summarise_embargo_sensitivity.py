@@ -22,6 +22,7 @@ SMOKE_TEST_SAFE = True
 # Helper functions
 # -----------------------------
 def find_col(df: pd.DataFrame, candidates: list[str]) -> str:
+    """Find a matching column name from a list of candidate names, case-insensitive."""
     lower_map = {c.lower(): c for c in df.columns}
     for name in candidates:
         if name.lower() in lower_map:
@@ -33,6 +34,7 @@ def find_col(df: pd.DataFrame, candidates: list[str]) -> str:
 # Scoring helpers
 # -----------------------------
 def summarise_prediction_file(path: Path, model_name: str, horizon: int, gap: int) -> dict:
+    """Compute skill metrics for a single prediction CSV under embargo sensitivity."""
     df = pd.read_csv(path)
 
     actual_col = find_col(df, ["Actual_Return", "actual_return", "Actual", "y_true", "target", "Target_Return"])
@@ -80,14 +82,15 @@ def summarise_prediction_file(path: Path, model_name: str, horizon: int, gap: in
 # Main entrypoint
 # -----------------------------
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dcn3", type=Path, required=True)
-    parser.add_argument("--lstm7", type=Path, required=True)
-    parser.add_argument("--outdir", type=Path, default=Path("results/embargo_sensitivity"))
+    parser = argparse.ArgumentParser(description="Summarise embargo sensitivity experiment prediction outputs.")
+    parser.add_argument("--dcn3", type=Path, required=True, help="Path to DCN 3-day prediction CSV")
+    parser.add_argument("--lstm7", type=Path, required=True, help="Path to LSTM 7-day prediction CSV")
+    parser.add_argument("--outdir", type=Path, default=Path("results/embargo_sensitivity"), help="Directory to write summary outputs")
     return parser.parse_args(argv)
 
 
 def main(args: argparse.Namespace) -> None:
+    """Summarise embargo sensitivity prediction results and export CSV/LaTeX tables."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     # -----------------------------

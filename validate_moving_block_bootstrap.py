@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -33,6 +34,7 @@ REQUIRED_COLS = {"Date", "Horizon", "Model", "Actual_Return", "Predicted_Return"
 
 
 def normalise_horizon(x: object) -> str:
+    """Normalize horizon labels into a canonical string form."""
     s = str(x).strip()
     if s in {"1", "1d", "1-day", "1 day"}:
         return "1-day"
@@ -44,18 +46,22 @@ def normalise_horizon(x: object) -> str:
 
 
 def horizon_to_int(h: str) -> int:
+    """Convert a normalized horizon string like '3-day' to an integer."""
     return int(str(h).split("-")[0].replace("d", "").strip())
 
 
 def rmse(a: np.ndarray, p: np.ndarray) -> float:
+    """Compute root mean squared error between actual and predicted arrays."""
     return float(np.sqrt(np.mean((a - p) ** 2)))
 
 
 def mae(a: np.ndarray, p: np.ndarray) -> float:
+    """Compute mean absolute error between actual and predicted arrays."""
     return float(np.mean(np.abs(a - p)))
 
 
 def moving_block_indices(T: int, block_length: int, rng: np.random.Generator) -> np.ndarray:
+    """Generate moving-block bootstrap row indices for dependence-aware resampling."""
     starts = np.arange(0, T - block_length + 1)
     idx = []
     while len(idx) < T:
@@ -65,12 +71,14 @@ def moving_block_indices(T: int, block_length: int, rng: np.random.Generator) ->
 
 
 def bootstrap_ci(x: np.ndarray, alpha: float = 0.05) -> tuple[float, float]:
+    """Compute percentile-based confidence intervals for bootstrap samples."""
     lo = float(np.quantile(x, alpha / 2))
     hi = float(np.quantile(x, 1 - alpha / 2))
     return lo, hi
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    """Parse CLI arguments for bootstrap skill interval computation."""
     p = argparse.ArgumentParser()
     p.add_argument("--predictions_csv", required=True)
     p.add_argument("--out_csv", default="results/validation/bootstrap_skill_summary.csv")
@@ -84,6 +92,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
 
 def main(args: argparse.Namespace) -> None:
+    """Run moving-block bootstrap across prediction CSVs and write interval summaries."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     rng = np.random.default_rng(args.seed)
 

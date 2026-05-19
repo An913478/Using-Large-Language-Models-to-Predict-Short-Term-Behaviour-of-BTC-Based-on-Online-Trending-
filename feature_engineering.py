@@ -25,6 +25,7 @@ SMOKE_TEST_SAFE = True
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute core BTC market, momentum, and trend features for modelling."""
     df = df.copy()
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
@@ -77,7 +78,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[list[str]] = None) -> None:
-    """Entry point for CLI invocation."""
+    """Load raw market/trends data, generate features, and write processed parquet."""
     args = parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
