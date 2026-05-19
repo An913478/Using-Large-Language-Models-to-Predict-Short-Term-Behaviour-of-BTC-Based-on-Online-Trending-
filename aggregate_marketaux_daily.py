@@ -23,6 +23,7 @@ SMOKE_TEST_SAFE = True
 
 
 def clean_text(value):
+    """Normalize raw text values by removing newlines and coercing missing values to empty string."""
     if pd.isna(value):
         return ""
     return str(value).replace("\n", " ").strip()
@@ -56,6 +57,7 @@ def build_daily_text(group: pd.DataFrame) -> str:
 
 
 def main(input_file: Path = INPUT_FILE, output_file: Path = OUTPUT_FILE, verbose: bool = False) -> None:
+    """Aggregate raw MarketAux articles into daily summary rows and save parquet output."""
     logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     if not input_file.exists():
