@@ -19,6 +19,7 @@ import pandas as pd
 
 
 def main(args: argparse.Namespace) -> None:
+    """Collect and aggregate predictions and metrics from seed subfolders into summary CSVs."""
     root = Path(args.root)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -95,6 +96,7 @@ def main(args: argparse.Namespace) -> None:
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    """Parse CLI arguments for aggregating repeated seed results."""
     parser = argparse.ArgumentParser(description="Aggregate repeated seed results.")
     parser.add_argument("--root", type=str, required=True, help="Root directory containing seed subfolders.")
     parser.add_argument("--out", type=str, required=True, help="Output directory for aggregated CSVs.")
