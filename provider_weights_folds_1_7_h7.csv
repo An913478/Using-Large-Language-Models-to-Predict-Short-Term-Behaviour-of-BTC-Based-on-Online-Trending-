@@ -1,0 +1,4 @@
+provider,selection_rmse,inverse_error,weight,weight_source_folds,weighting_rule
+claude,0.07205751835071662,13.877802384656436,0.3369622835394531,1--7,inverse_selection_rmse
+gemini,0.0736228357399055,13.58274222868563,0.32979802646317746,1--7,inverse_selection_rmse
+openai,0.0728624670423718,13.724487251007693,0.33323968999736936,1--7,inverse_selection_rmse
